@@ -1,41 +1,44 @@
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class EvictionMap<K, V> extends ConcurrentHashMap<K, V> {
 
-    private AtomicLong durationInNanos;
+    private Long durationInNanos;
     private ScheduledExecutorService scheduler;
     private ConcurrentHashMap<K, Long> evictionTimeMap;
+    private ConcurrentLinkedQueue<K> evictionQueue;
 
     public EvictionMap(long durationInMillis) {
-        this.durationInNanos = new AtomicLong(TimeUnit.MILLISECONDS.toNanos(durationInMillis));
-        this.scheduler = Executors.newSingleThreadScheduledExecutor();
+        this.durationInNanos = TimeUnit.MILLISECONDS.toNanos(durationInMillis);
         this.evictionTimeMap = new ConcurrentHashMap<K, Long>();
+        this.evictionQueue = new ConcurrentLinkedQueue<K>();
+        this.scheduler = Executors.newSingleThreadScheduledExecutor();
+
+        scheduler.scheduleAtFixedRate(new Runnable() { public void run() {
+
+            for (K k : evictionQueue) {
+                if (evictionTimeMap.get(k) < System.nanoTime()) {
+                    remove(k);
+                    evictionQueue.remove();
+                } else {
+                    break;
+                }
+            }
+        }}, 1, 1, TimeUnit.SECONDS);
     }
 
     @Override
-    public V put(final K key, V value) {
-        evictionTimeMap.put(key, System.nanoTime() + durationInNanos.get());
-        schedule(key);
+    synchronized public V put(K key, V value) {
+        evictionTimeMap.put(key, System.nanoTime() + durationInNanos);
+        evictionQueue.add(key);
         return super.put(key, value);
     }
 
     @Override
-    public V get(Object key) {
-        if (evictionTimeMap.get(key) < System.nanoTime()) {
+    synchronized public V get(Object key) {
+        if (evictionTimeMap.get(key) != null && evictionTimeMap.get(key) < System.nanoTime()) {
             remove(key);
         }
         return super.get(key);
-    }
-
-    public ScheduledExecutorService getScheduler() {
-        return scheduler;
-    }
-
-    synchronized private Future<?> schedule(final K key) {
-        return scheduler.schedule(new Runnable() { public void run() {
-                                      remove(key); }},
-                evictionTimeMap.get(key) - System.nanoTime(), TimeUnit.NANOSECONDS);
     }
 
 }
